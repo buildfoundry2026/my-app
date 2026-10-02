@@ -1,0 +1,160 @@
+{
+  "app_name": "QuoteCanvas",
+  "personality": "3 Editorial Mobile LIGHT",
+  "personality_one_liner": "A warm, bookish editorial experience that feels like reading a well-crafted physical book, emphasizing typography and breathing room.",
+  "color": {
+    "surface": "#FCFAF8",
+    "onSurface": "#1C1917",
+    "surfaceSecondary": "#F5F0E6",
+    "onSurfaceSecondary": "#1C1917",
+    "surfaceTertiary": "#EBE4D5",
+    "onSurfaceTertiary": "#292524",
+    "surfaceInverse": "#292524",
+    "onSurfaceInverse": "#FCFAF8",
+    "brand": "#B45309",
+    "brandPrimary": "#B45309",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#D97706",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#FDE68A",
+    "onBrandTertiary": "#92400E",
+    "success": "#4D7C0F",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D97706",
+    "onWarning": "#FFFFFF",
+    "error": "#DC2626",
+    "onError": "#FFFFFF",
+    "info": "#0369A1",
+    "onInfo": "#FFFFFF",
+    "border": "#E7E5E4",
+    "borderStrong": "#A8A29E",
+    "divider": "#E7E5E4",
+    "muted": "#78716C"
+  },
+  "quote_templates": [
+    { "name": "Minimalist Dark", "background": "#1C1917", "text": "#F5F5F5", "font": "serif" },
+    { "name": "Typewriter Cream", "background": "#F5F0E6", "text": "#292524", "font": "mono" },
+    { "name": "Modern Gradient", "background": "linear-gradient(#FFEDD5, #FEF08A)", "text": "#78350F", "font": "sans" },
+    { "name": "Olive Botanical", "background": "#4D533C", "text": "#F3F4F6", "font": "serif" },
+    { "name": "Terracotta Warmth", "background": "#9A3412", "text": "#FFEDD5", "font": "serif" }
+  ],
+  "typography": {
+    "displayFontFamily": "Cormorant Garamond",
+    "textFontFamily": "DM Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Magazine-like spacing rhythms with generous vertical breathing room. Elements should never feel cramped.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 2,
+    "md": 4,
+    "lg": 8,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs",
+  "icon_set": "Feather",
+  "glassmorphism": {
+    "enabled": "false",
+    "do's": ["Use solid surface colors or minimal translucent overlays instead of heavy glass to maintain the editorial paper feel."],
+    "dont's": ["No heavy blur or frosted glass layers. It contradicts the physical book aesthetic."]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Camera",
+      "purpose": "Frictionless entry point to scan physical book pages.",
+      "states": {
+        "loading": "Camera initializing with a subtle fade.",
+        "empty": "N/A",
+        "error": "Permission denied fallback overlay with open settings CTA."
+      },
+      "layout": "Full-screen camera viewfinder. A subtle framing overlay (like brackets or a darkened vignette mask) guides the user to center the text. The bottom area contains a solid `surface` or `surfaceInverse` control bar with a large, tactile capture button (using `brandPrimary`) and a gallery icon."
+    },
+    {
+      "name": "Crop",
+      "purpose": "Allow users to precisely isolate the quote text from the captured page.",
+      "states": {
+        "loading": "Skeleton loader replacing the cropped image area during OCR processing after confirmation.",
+        "empty": "N/A",
+        "error": "Toast indicating text could not be extracted."
+      },
+      "layout": "Full-screen image with standard 8-point crop handles. The top header has a 'Retake' action. A sticky primary CTA ('Extract Text') sits fixed at the bottom."
+    },
+    {
+      "name": "Editor",
+      "purpose": "Style the extracted text into an aesthetic quote graphic.",
+      "states": {
+        "loading": "OCR skeleton loader if navigated here directly during processing.",
+        "empty": "N/A",
+        "error": "Text unclear toast."
+      },
+      "layout": "Split layout. The top 55% is the Canvas preview area with a `surfaceSecondary` background, displaying the quote graphic centered and scaled. The bottom 45% is a ScrollView wrapped in `surface` containing the controls: multi-line text editor (500 char limit), single-line inputs for Book Title and Author, a segmented control for aspect ratio (9:16, 4:5, 1:1), and a horizontal scroll of 5 template swatches. A sticky 'Export & Share' CTA rests at the absolute bottom."
+    },
+    {
+      "name": "History",
+      "purpose": "Gallery of previously saved quote graphics.",
+      "states": {
+        "loading": "Grid of skeleton cards.",
+        "empty": "Full screen layout with the vintage open book image, a short elegant text 'No quotes saved yet.', and a 'Scan Quote' primary CTA.",
+        "error": "Error loading history with a retry button."
+      },
+      "layout": "Editorial 2-column masonry grid. Cards have sharp corners (radius sm or 0) mimicking physical polaroids or clippings. Generous padding (`md` or `lg`) between grid items."
+    },
+    {
+      "name": "Settings",
+      "purpose": "App preferences and permissions management.",
+      "states": {
+        "loading": "N/A",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "Minimalist list layout using `Cormorant Garamond` for section headers and `DM Sans` for list items. Includes a 'Camera Permissions' row."
+    }
+  ],
+  "images": {
+    "empty_history": {
+      "url": "https://images.unsplash.com/photo-1529589941132-43606325dfb4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwxfHx2aW50YWdlJTIwYm9vayUyMG9wZW4lMjB0ZXh0JTIwYWVzdGhldGljfGVufDB8fHx8MTc5MDg5OTI5NXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Opened vintage book on brown textile"
+    },
+    "permission_denied": {
+      "url": "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1Mjh8MHwxfHNlYXJjaHwxfHxjbG9zZWQlMjBjYW1lcmElMjBsZW5zJTIwbWluaW1hbCUyMGFlc3RoZXRpY3xlbnwwfHx8fDE3OTA4OTkyOTl8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Closed camera lens on black surface"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Apply Personality 3 (Editorial Mobile LIGHT): Use 'Cormorant Garamond' for display titles and 'DM Sans' for body text. Keep spacing generous and UI elements sharp (radius 0 or sm). Avoid heavy shadows or default Material dropshadows.",
+    "Banned Colors Strict Ban: Do NOT use indigo, violet, purple, or any blue including navy. The theme uses warm paper tones, terracotta, and charcoal.",
+    "Implement the 5 specific quote palettes defined in the JSON for the canvas templates. These are separate from the main app UI colors and are injected into the view-shot canvas.",
+    "Ensure the Editor screen layout is split properly so the user can see the quote canvas update in real-time as they type or change templates below.",
+    "For the OCR skeleton loader, use a rhythmic pulsing block matching the lines of text in the cropped image or a generic paragraph skeleton, avoiding default spinning circles.",
+    "The sticky 'Export & Share' button in the Editor MUST sit above the home indicator, allowing the control panel behind it to scroll freely.",
+    "Empty states must use the provided Unsplash images with a gradient-to-dark scrim (top -> bottom, transparent to >=70% surfaceInverse) to guarantee text readability.",
+    "Add tactile haptic feedback on capture, template selection, and export actions."
+  ]
+}
