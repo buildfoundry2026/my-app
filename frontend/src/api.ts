@@ -1,24 +1,13 @@
 import { storage } from "@/src/utils/storage";
+import { supabase } from "@/src/utils/supabase";
 
 import { AspectRatio, TemplateId } from "./templates";
-
-const BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
-
-// In-memory session token; set by AuthContext. Cleared on logout / 401.
-let sessionToken: string | null = null;
-let onUnauthorized: (() => void) | null = null;
-export const setSessionToken = (t: string | null) => {
-  sessionToken = t;
-};
-export const setUnauthorizedHandler = (fn: (() => void) | null) => {
-  onUnauthorized = fn;
-};
 
 export type AuthUser = { user_id: string; email: string; name: string | null; picture: string | null; created_at: string };
 
 export type SavedQuote = {
   id: string;
-  device_id: string;
+  user_id: string;
   raw_text: string;
   book_title: string | null;
   author: string | null;
@@ -27,9 +16,13 @@ export type SavedQuote = {
   created_at: string;
 };
 
-export type OcrResult = { ok: boolean; text: string; word_count: number; message?: string | null; remaining?: number | null };
-
-export type AiUsage = { limit: number; used: number; remaining: number; date: string };
+type QuoteInput = {
+  raw_text: string;
+  book_title?: string | null;
+  author?: string | null;
+  template_used: TemplateId;
+  aspect_ratio: AspectRatio;
+};
 
 const DEVICE_KEY = "qc.device_id";
 let cachedDeviceId: string | null = null;
@@ -47,60 +40,28 @@ export async function getDeviceId(): Promise<string> {
   return fresh;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (res.status === 401 && !path.startsWith("/auth/")) {
-    onUnauthorized?.();
-  }
-  if (!res.ok) {
-    let detail = `Request failed (${res.status})`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-    } catch {}
-    throw new Error(detail);
-  }
-  return res.json();
-}
-
 export const api = {
-  exchangeSession: async (session_id: string) => {
-    const device_id = await getDeviceId();
-    return request<{ session_token: string; user: AuthUser; merged_quotes: number }>("/auth/session", {
-      method: "POST",
-      body: JSON.stringify({ session_id, device_id }),
-    });
-  },
-  me: () => request<AuthUser>("/auth/me"),
-  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
-
-  ocr: (image_base64: string) =>
-    request<OcrResult>("/ocr", { method: "POST", body: JSON.stringify({ image_base64 }) }),
-
-  aiUsage: () => request<AiUsage>("/ai/usage"),
-
-  listQuotes: () => request<SavedQuote[]>("/quotes"),
-
-  createQuote: async (body: {
-    raw_text: string;
-    book_title?: string | null;
-    author?: string | null;
-    template_used: TemplateId;
-    aspect_ratio: AspectRatio;
-  }) => {
-    const device_id = await getDeviceId();
-    return request<SavedQuote>("/quotes", { method: "POST", body: JSON.stringify({ ...body, device_id }) });
+  listQuotes: async (): Promise<SavedQuote[]> => {
+    const { data, error } = await supabase.from("quotes").select("*").order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data as SavedQuote[];
   },
 
-  updateQuote: (id: string, body: Partial<Omit<SavedQuote, "id" | "device_id" | "created_at">>) =>
-    request<SavedQuote>(`/quotes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  createQuote: async (body: QuoteInput): Promise<SavedQuote> => {
+    const { data, error } = await supabase.from("quotes").insert(body).select().single();
+    if (error) throw new Error(error.message);
+    return data as SavedQuote;
+  },
 
-  deleteQuote: (id: string) => request<{ ok: boolean }>(`/quotes/${id}`, { method: "DELETE" }),
+  updateQuote: async (id: string, body: Partial<QuoteInput>): Promise<SavedQuote> => {
+    const { data, error } = await supabase.from("quotes").update(body).eq("id", id).select().single();
+    if (error) throw new Error(error.message);
+    return data as SavedQuote;
+  },
+
+  deleteQuote: async (id: string): Promise<{ ok: boolean }> => {
+    const { error } = await supabase.from("quotes").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  },
 };

@@ -7,7 +7,6 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAuth } from "@/src/auth";
-import { IconButton } from "@/src/components/ui";
 import { makeStyles, useTheme } from "@/src/theme";
 
 const IMAGE =
@@ -20,15 +19,10 @@ export default function LoginScreen() {
   const router = useRouter();
   const { signIn, signingIn, user } = useAuth();
 
-  // Dismiss automatically once sign-in completes.
+  // The root Stack.Protected guard normally handles this; kept as a fallback.
   useEffect(() => {
-    if (user) {
-      if (router.canGoBack()) router.back();
-      else router.replace("/(tabs)");
-    }
+    if (user) router.replace("/(tabs)");
   }, [user, router]);
-
-  const close = () => (router.canGoBack() ? router.back() : router.replace("/(tabs)"));
 
   return (
     <View testID="login-screen" style={styles.root}>
@@ -37,14 +31,12 @@ export default function LoginScreen() {
       <View style={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}>
         <View style={styles.topRow}>
           <Text style={styles.brand}>QuoteCanvas</Text>
-          <IconButton testID="login-close-button" icon="x" color={colors.onSurfaceInverse} onPress={close} />
         </View>
         <View style={{ flex: 1 }} />
         <Text style={styles.eyebrow}>SNAP · CROP · STYLE · SHARE</Text>
         <Text style={styles.title}>Your favourite lines, beautifully kept.</Text>
         <Text style={styles.body}>
-          Sign in to save quotes to your history, sync across phones, and unlock Improve with AI. Quotes already on this
-          device will be merged into your account.
+          Sign in to save quotes to your history and sync them across your phones.
         </Text>
         <Pressable
           testID="login-google-button"
@@ -57,7 +49,7 @@ export default function LoginScreen() {
           ) : (
             <>
               <Feather name="log-in" size={18} color={colors.onSurface} />
-              <Text style={styles.buttonText}>Continue with Google</Text>
+              <Text style={styles.buttonText}>Sign in with Google</Text>
             </>
           )}
         </Pressable>

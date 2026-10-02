@@ -125,8 +125,7 @@ export default function CropScreen() {
       const rendered = await ctx.renderAsync();
       const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.85 });
 
-      // Default scan runs fully on-device (instant, offline, private). The cropped
-      // image URI rides along so the editor can offer an optional "Improve with AI".
+      // Scan runs fully on-device (instant, offline, private).
       let text = "";
       if (onDeviceOcrAvailable) {
         try {
@@ -135,15 +134,15 @@ export default function CropScreen() {
           text = "";
         }
         if (!text) {
-          toast("No text found. You can type it in or tap Improve with AI.", "info");
+          toast("No text found. You can type it in on the next steps.", "info");
         }
       } else {
-        toast("On-device scanning needs a device build. Type it in or use Improve with AI.", "info");
+        toast("On-device scanning needs a device build. You can type the quote in.", "info");
       }
 
-      setDraft({ id: null, ocrText: text, imageUri: saved.uri });
+      setDraft({ id: null, ocrText: text, imageUri: saved.uri, bookTitle: "", author: "" });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      router.replace("/editor");
+      router.replace("/style");
     } catch {
       toast("Couldn't read the page. Please retry.", "error");
     } finally {

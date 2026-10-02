@@ -1,151 +1,101 @@
-import * as Linking from "expo-linking";
+import type { Session, User } from "@supabase/supabase-js";
+import { makeRedirectUri } from "expo-auth-session";
+import * as QueryParams from "expo-auth-session/build/QueryParams";
 import * as WebBrowser from "expo-web-browser";
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Platform } from "react-native";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-import { api, AuthUser, setSessionToken, setUnauthorizedHandler } from "@/src/api";
-import { storage } from "@/src/utils/storage";
+import type { AuthUser } from "@/src/api";
+import { toast } from "@/src/store";
+import { supabase } from "@/src/utils/supabase";
 
-WebBrowser.maybeCompleteAuthSession();
-
-const TOKEN_KEY = "qc.session_token";
-const AUTH_URL = "https://auth.emergentagent.com/";
+WebBrowser.maybeCompleteAuthSession(); // required for web only
 
 type AuthState = {
   loading: boolean;
   user: AuthUser | null;
+  session: Session | null;
   signingIn: boolean;
-  lastMerged: number;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
 
-const extractSessionId = (url: string | null | undefined): string | null => {
-  if (!url) return null;
-  const m = url.match(/[?#&]session_id=([^&#]+)/);
-  return m ? decodeURIComponent(m[1]) : null;
-};
+const toAuthUser = (u: User): AuthUser => ({
+  user_id: u.id,
+  email: u.email ?? "",
+  name: (u.user_metadata?.full_name as string | undefined) ?? (u.user_metadata?.name as string | undefined) ?? null,
+  picture: (u.user_metadata?.avatar_url as string | undefined) ?? (u.user_metadata?.picture as string | undefined) ?? null,
+  created_at: u.created_at,
+});
 
-const stripSessionIdFromWebUrl = () => {
-  if (Platform.OS !== "web" || typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  url.searchParams.delete("session_id");
-  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
-  hashParams.delete("session_id");
-  const hash = hashParams.toString();
-  url.hash = hash ? `#${hash}` : "";
-  window.history.replaceState(window.history.state, "", url.toString());
+const createSessionFromUrl = async (url: string) => {
+  const { params, errorCode } = QueryParams.getQueryParams(url);
+  if (errorCode) throw new Error(params.error_description || errorCode);
+  const { access_token, refresh_token } = params;
+  if (!access_token) return null;
+  const { data, error } = await supabase.auth.setSession({ access_token, refresh_token });
+  if (error) throw error;
+  return data.session;
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [signingIn, setSigningIn] = useState(false);
-  const [lastMerged, setLastMerged] = useState(0);
-  const usedSessionIds = useRef<Set<string>>(new Set());
 
-  const clearAuth = useCallback(async () => {
-    setSessionToken(null);
-    await storage.secureRemove(TOKEN_KEY);
-    setUser(null);
-  }, []);
-
-  const exchange = useCallback(async (sessionId: string): Promise<boolean> => {
-    if (usedSessionIds.current.has(sessionId)) return false;
-    usedSessionIds.current.add(sessionId);
-    try {
-      const res = await api.exchangeSession(sessionId);
-      setSessionToken(res.session_token);
-      await storage.secureSet(TOKEN_KEY, res.session_token);
-      setLastMerged(res.merged_quotes);
-      setUser(res.user);
-      if (Platform.OS === "web") stripSessionIdFromWebUrl();
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  // Boot: process session_id in URL first, then restore stored token.
   useEffect(() => {
-    setUnauthorizedHandler(() => {
-      clearAuth();
-    });
     let cancelled = false;
-    (async () => {
-      try {
-        let sid: string | null = null;
-        if (Platform.OS === "web" && typeof window !== "undefined") {
-          sid = extractSessionId(window.location.hash) ?? extractSessionId(window.location.search);
-        } else {
-          sid = extractSessionId(await Linking.getInitialURL());
-        }
-        if (sid && (await exchange(sid))) return;
-
-        const stored = await storage.secureGet(TOKEN_KEY, "");
-        if (stored) {
-          setSessionToken(stored);
-          try {
-            const me = await api.me();
-            if (!cancelled) setUser(me);
-          } catch {
-            await clearAuth();
-          }
-        }
-      } finally {
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!cancelled) setSession(data.session);
+      })
+      .finally(() => {
         if (!cancelled) setLoading(false);
-      }
-    })();
+      });
 
-    // Hot deep links (mobile): Android may deliver the callback here instead of result.url
-    const sub = Linking.addEventListener("url", ({ url }) => {
-      const sid = extractSessionId(url);
-      if (sid) exchange(sid);
+    const { data } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
     });
     return () => {
       cancelled = true;
-      sub.remove();
-      setUnauthorizedHandler(null);
+      data.subscription.unsubscribe();
     };
-  }, [clearAuth, exchange]);
+  }, []);
 
   const signIn = useCallback(async () => {
     if (signingIn) return;
     setSigningIn(true);
     try {
-      if (Platform.OS === "web") {
-        const redirectUrl = `${window.location.origin}/`;
-        window.location.href = `${AUTH_URL}?redirect=${encodeURIComponent(redirectUrl)}`;
-        return;
-      }
-      const redirectUrl = Linking.createURL("");
-      const authUrl = `${AUTH_URL}?redirect=${encodeURIComponent(redirectUrl)}`;
-      let captured: string | null = null;
-      const sub = Linking.addEventListener("url", ({ url }) => {
-        if (extractSessionId(url)) captured = url;
+      const redirectTo = makeRedirectUri();
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo, skipBrowserRedirect: true },
       });
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-      sub.remove();
-      const url = (result.type === "success" ? result.url : null) ?? captured ?? (await Linking.getInitialURL());
-      const sid = extractSessionId(url);
-      if (sid) await exchange(sid);
+      if (error) throw error;
+      const res = await WebBrowser.openAuthSessionAsync(data?.url ?? "", redirectTo);
+      if (res.type === "success") {
+        const created = await createSessionFromUrl(res.url);
+        if (!created) throw new Error("Sign-in didn't return a session.");
+      }
+    } catch (e: any) {
+      toast(e?.message || "Google sign-in failed. Please try again.", "error");
     } finally {
       setSigningIn(false);
     }
-  }, [exchange, signingIn]);
+  }, [signingIn]);
 
   const signOut = useCallback(async () => {
-    try {
-      await api.logout();
-    } catch {}
-    await clearAuth();
-  }, [clearAuth]);
+    const { error } = await supabase.auth.signOut();
+    if (error) toast("Couldn't sign out. Please try again.", "error");
+  }, []);
+
+  const user = useMemo(() => (session?.user ? toAuthUser(session.user) : null), [session]);
 
   const value = useMemo(
-    () => ({ loading, user, signingIn, lastMerged, signIn, signOut }),
-    [loading, user, signingIn, lastMerged, signIn, signOut],
+    () => ({ loading, user, session, signingIn, signIn, signOut }),
+    [loading, user, session, signingIn, signIn, signOut],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

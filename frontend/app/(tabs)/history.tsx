@@ -51,7 +51,7 @@ export default function HistoryScreen() {
       aspectRatio: q.aspect_ratio ?? "4:5",
       imageUri: null,
     });
-    router.push("/editor");
+    router.push("/style");
   };
 
   const cardW = (width - 24 * 2 - 16) / 2;

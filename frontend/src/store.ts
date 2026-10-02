@@ -9,8 +9,7 @@ export type QuoteDraft = {
   author: string;
   selectedTemplate: TemplateId;
   aspectRatio: AspectRatio;
-  // Local URI of the cropped page image. Enables the editor's "Improve with AI"
-  // action to re-send the page. Null when a draft is opened from saved history.
+  // Local URI of the cropped page image. Null when a draft is opened from saved history.
   imageUri: string | null;
 };
 

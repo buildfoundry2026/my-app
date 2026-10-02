@@ -109,7 +109,7 @@ export default function SettingsScreen() {
 
         <Text style={styles.section}>About</Text>
         <Row testID="settings-version-row" icon="info" label="QuoteCanvas" value="1.0.0" />
-        <Row testID="settings-ocr-row" icon="cpu" label="Scanning" value="On-device + AI" />
+        <Row testID="settings-ocr-row" icon="cpu" label="Scanning" value="On-device" />
         <View style={styles.deviceWrap}>
           <Text style={styles.deviceLabel}>DEVICE ID</Text>
           <Text testID="settings-device-id" style={styles.deviceId} selectable>

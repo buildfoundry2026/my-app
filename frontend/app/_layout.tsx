@@ -12,7 +12,6 @@ import { AuthProvider, useAuth } from "@/src/auth";
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { ToastHost } from "@/src/components/ui";
 import { queryClient } from "@/src/query-client";
-import { toast } from "@/src/store";
 import { useTheme } from "@/src/theme";
 
 // Disable logbox errors etc so that users can see the app
@@ -23,17 +22,14 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 
 // Single auth gate: null -> /login, authenticated -> app.
 function AuthGate() {
-  const { loading, user, lastMerged } = useAuth();
+  const { loading, user } = useAuth();
   const { colors } = useTheme();
+  const userId = user?.user_id;
 
   useEffect(() => {
-    if (user) {
-      queryClient.invalidateQueries({ queryKey: ["quotes"] });
-      if (lastMerged > 0) toast(`${lastMerged} quote${lastMerged === 1 ? "" : "s"} from this device merged into your account.`, "success");
-    } else {
-      queryClient.clear();
-    }
-  }, [user, lastMerged]);
+    if (userId) queryClient.invalidateQueries({ queryKey: ["quotes"] });
+    else queryClient.clear();
+  }, [userId]);
 
   if (loading) {
     return (
@@ -45,11 +41,16 @@ function AuthGate() {
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
+      <Stack.Protected guard={!!user}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="crop" options={{ animation: "fade" }} />
+        <Stack.Screen name="style" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="details" options={{ animation: "slide_from_right" }} />
+      </Stack.Protected>
+      <Stack.Protected guard={!user}>
+        <Stack.Screen name="login" options={{ animation: "fade" }} />
+      </Stack.Protected>
       <Stack.Screen name="index" />
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="login" options={{ animation: "slide_from_bottom" }} />
-      <Stack.Screen name="crop" options={{ animation: "fade" }} />
-      <Stack.Screen name="editor" options={{ animation: "slide_from_right" }} />
     </Stack>
   );
 }
