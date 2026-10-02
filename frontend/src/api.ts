@@ -4,6 +4,18 @@ import { AspectRatio, TemplateId } from "./templates";
 
 const BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 
+// In-memory session token; set by AuthContext. Cleared on logout / 401.
+let sessionToken: string | null = null;
+let onUnauthorized: (() => void) | null = null;
+export const setSessionToken = (t: string | null) => {
+  sessionToken = t;
+};
+export const setUnauthorizedHandler = (fn: (() => void) | null) => {
+  onUnauthorized = fn;
+};
+
+export type AuthUser = { user_id: string; email: string; name: string | null; picture: string | null; created_at: string };
+
 export type SavedQuote = {
   id: string;
   device_id: string;
@@ -36,8 +48,15 @@ export async function getDeviceId(): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
+  if (res.status === 401 && !path.startsWith("/auth/")) {
+    onUnauthorized?.();
+  }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`;
     try {
@@ -50,13 +69,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  exchangeSession: async (session_id: string) => {
+    const device_id = await getDeviceId();
+    return request<{ session_token: string; user: AuthUser; merged_quotes: number }>("/auth/session", {
+      method: "POST",
+      body: JSON.stringify({ session_id, device_id }),
+    });
+  },
+  me: () => request<AuthUser>("/auth/me"),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+
   ocr: (image_base64: string) =>
     request<OcrResult>("/ocr", { method: "POST", body: JSON.stringify({ image_base64 }) }),
 
-  listQuotes: async () => {
-    const device_id = await getDeviceId();
-    return request<SavedQuote[]>(`/quotes?device_id=${encodeURIComponent(device_id)}`);
-  },
+  listQuotes: () => request<SavedQuote[]>("/quotes"),
 
   createQuote: async (body: {
     raw_text: string;

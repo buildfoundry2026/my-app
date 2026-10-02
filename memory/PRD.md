@@ -20,11 +20,12 @@ Mobile app (iOS/Android, Expo) that turns photos of physical book pages into aes
 ## Implemented (2026-06)
 - Full flow: camera → crop → OCR → editor → export/share; history CRUD; settings; permission fallback with Open Settings; offline queue with "Extract" later; text-unclear toast; 500-char limit; haptics.
 - Tested: backend pytest 14/14 (`backend/tests/test_api.py`), frontend editor↔history flow verified by testing agent (iteration 2).
+- Account Sync (2026-06): Emergent-managed Google sign-in. `POST /api/auth/session` (exchanges session_id, upserts user by email, mints 7-day session, merges device quotes into account), `GET /api/auth/me`, `POST /api/auth/logout`. All `/api/quotes*` require Bearer token and are scoped by `user_id`. Frontend: `src/auth.tsx` AuthProvider (web hash parsing + mobile openAuthSessionAsync + deep-link fallbacks), `app/login.tsx`, root gate via `Stack.Protected` in `_layout.tsx` (sign-in required), account card + sign out in Settings. Tested: pytest 21/21, UI gate/settings/sign-out verified (iteration 3).
 
 ## Backlog
 - P0: none open.
 - P1: Google Books auto-fill of title/author from extracted text; share directly to specific apps; edit saved quote text inline from history.
-- P2: custom fonts/colors per template; multiple quotes per page (multi-crop); account sync (JWT or Google) so history follows the user across devices; dark mode UI.
+- P2: custom fonts/colors per template; multiple quotes per page (multi-crop); dark mode UI.
 
 ## Notes
 - Camera/crop/share/save-to-photos are device-only features; web preview shows permission fallback.

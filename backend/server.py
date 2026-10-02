@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,10 +6,11 @@ from bson import ObjectId
 import os
 import logging
 import uuid
+import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, AliasChoices
 from typing import List, Optional, Annotated, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -58,7 +59,8 @@ def now_iso() -> str:
 
 # ---------- Models ----------
 class Quote(BaseDocument):
-    device_id: str
+    device_id: Optional[str] = None
+    user_id: Optional[str] = None
     raw_text: str
     book_title: Optional[str] = None
     author: Optional[str] = None
@@ -70,12 +72,129 @@ class Quote(BaseDocument):
 
 
 class QuoteCreate(BaseModel):
-    device_id: str
+    device_id: Optional[str] = None
     raw_text: str = Field(min_length=1, max_length=500)
     book_title: Optional[str] = None
     author: Optional[str] = None
     template_used: str
     aspect_ratio: str = "4:5"
+
+
+class User(BaseModel):
+    user_id: str
+    email: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    created_at: str
+
+
+class SessionRequest(BaseModel):
+    session_id: str
+    device_id: Optional[str] = None
+
+
+class SessionResponse(BaseModel):
+    session_token: str
+    user: User
+    merged_quotes: int = 0
+
+
+# ---------- Auth ----------
+EMERGENT_SESSION_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+
+
+async def get_current_user(request: Request) -> User:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = auth[7:].strip()
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    expires = session["expires_at"]
+    if isinstance(expires, str):
+        expires = datetime.fromisoformat(expires)
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Session expired")
+    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return User(**user)
+
+
+@app.on_event("startup")
+async def ensure_indexes():
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("user_id", unique=True)
+    await db.user_sessions.create_index("session_token", unique=True)
+    await db.user_sessions.create_index("user_id")
+    await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+    await db.quotes.create_index([("user_id", 1), ("created_at", -1)])
+
+
+@api_router.post("/auth/session", response_model=SessionResponse)
+async def create_session(body: SessionRequest):
+    async with httpx.AsyncClient(timeout=15) as http:
+        try:
+            res = await http.get(EMERGENT_SESSION_URL, headers={"X-Session-ID": body.session_id})
+        except httpx.HTTPError:
+            raise HTTPException(status_code=401, detail="Could not verify sign-in")
+    if res.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid or expired sign-in")
+    data = res.json()
+    email = (data.get("email") or "").lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="No email returned")
+
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        user_id = existing["user_id"]
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"name": data.get("name"), "picture": data.get("picture")}},
+        )
+        user_doc = {**existing, "name": data.get("name"), "picture": data.get("picture")}
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        user_doc = {
+            "user_id": user_id,
+            "email": email,
+            "name": data.get("name"),
+            "picture": data.get("picture"),
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(dict(user_doc))
+
+    session_token = data.get("session_token") or uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    await db.user_sessions.insert_one(
+        {"session_token": session_token, "user_id": user_id, "created_at": now, "expires_at": now + timedelta(days=7)}
+    )
+
+    merged = 0
+    if body.device_id:
+        res_merge = await db.quotes.update_many(
+            {"device_id": body.device_id, "user_id": None, "deleted_at": None},
+            {"$set": {"user_id": user_id, "updated_at": now_iso()}},
+        )
+        merged = res_merge.modified_count
+
+    return SessionResponse(session_token=session_token, user=User(**user_doc), merged_quotes=merged)
+
+
+@api_router.get("/auth/me", response_model=User)
+async def me(user: User = Depends(get_current_user)):
+    return user
+
+
+@api_router.post("/auth/logout")
+async def logout(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        await db.user_sessions.delete_one({"session_token": auth[7:].strip()})
+    return {"ok": True}
 
 
 class QuoteUpdate(BaseModel):
@@ -155,38 +274,38 @@ async def ocr(req: OcrRequest):
 
 
 @api_router.post("/quotes", response_model=Quote)
-async def create_quote(body: QuoteCreate):
-    quote = Quote(**body.model_dump())
+async def create_quote(body: QuoteCreate, user: User = Depends(get_current_user)):
+    quote = Quote(**body.model_dump(), user_id=user.user_id)
     res = await db.quotes.insert_one(quote.to_mongo())
     quote.id = str(res.inserted_id)
     return quote
 
 
 @api_router.get("/quotes", response_model=List[Quote])
-async def list_quotes(device_id: str):
-    cursor = db.quotes.find({"device_id": device_id, "deleted_at": None}).sort("created_at", -1)
+async def list_quotes(user: User = Depends(get_current_user)):
+    cursor = db.quotes.find({"user_id": user.user_id, "deleted_at": None}).sort("created_at", -1)
     docs = await cursor.to_list(500)
     return [Quote.from_mongo(d) for d in docs]
 
 
 @api_router.get("/quotes/{quote_id}", response_model=Quote)
-async def get_quote(quote_id: str):
+async def get_quote(quote_id: str, user: User = Depends(get_current_user)):
     if not ObjectId.is_valid(quote_id):
         raise HTTPException(status_code=404, detail="Quote not found")
-    doc = await db.quotes.find_one({"_id": ObjectId(quote_id), "deleted_at": None})
+    doc = await db.quotes.find_one({"_id": ObjectId(quote_id), "user_id": user.user_id, "deleted_at": None})
     if not doc:
         raise HTTPException(status_code=404, detail="Quote not found")
     return Quote.from_mongo(doc)
 
 
 @api_router.patch("/quotes/{quote_id}", response_model=Quote)
-async def update_quote(quote_id: str, body: QuoteUpdate):
+async def update_quote(quote_id: str, body: QuoteUpdate, user: User = Depends(get_current_user)):
     if not ObjectId.is_valid(quote_id):
         raise HTTPException(status_code=404, detail="Quote not found")
     update = {k: v for k, v in body.model_dump().items() if v is not None}
     update["updated_at"] = now_iso()
     res = await db.quotes.find_one_and_update(
-        {"_id": ObjectId(quote_id), "deleted_at": None}, {"$set": update}, return_document=True
+        {"_id": ObjectId(quote_id), "user_id": user.user_id, "deleted_at": None}, {"$set": update}, return_document=True
     )
     if not res:
         raise HTTPException(status_code=404, detail="Quote not found")
@@ -194,11 +313,11 @@ async def update_quote(quote_id: str, body: QuoteUpdate):
 
 
 @api_router.delete("/quotes/{quote_id}")
-async def delete_quote(quote_id: str):
+async def delete_quote(quote_id: str, user: User = Depends(get_current_user)):
     if not ObjectId.is_valid(quote_id):
         raise HTTPException(status_code=404, detail="Quote not found")
     res = await db.quotes.update_one(
-        {"_id": ObjectId(quote_id), "deleted_at": None}, {"$set": {"deleted_at": now_iso()}}
+        {"_id": ObjectId(quote_id), "user_id": user.user_id, "deleted_at": None}, {"$set": {"deleted_at": now_iso()}}
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Quote not found")

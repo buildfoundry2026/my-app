@@ -1,12 +1,14 @@
 import Feather from "@react-native-vector-icons/feather";
 import { useCameraPermissions } from "expo-camera";
+import { Image } from "expo-image";
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useState } from "react";
 import { Linking, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { getDeviceId, getQueue } from "@/src/api";
-import { ScreenTitle } from "@/src/components/ui";
+import { useAuth } from "@/src/auth";
+import { Button, ScreenTitle } from "@/src/components/ui";
 import { usesNativeTabs } from "@/src/navigation";
 import { TEMPLATES } from "@/src/templates";
 import { makeStyles, useTheme } from "@/src/theme";
@@ -31,6 +33,8 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
   const [permission, requestPermission] = useCameraPermissions();
+  const { user, signOut } = useAuth();
+  const { colors } = useTheme();
   const [deviceId, setDeviceId] = useState("");
   const [queueCount, setQueueCount] = useState(0);
 
@@ -54,6 +58,31 @@ export default function SettingsScreen() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={{ paddingBottom: bottomChrome + 24 }}>
         <ScreenTitle title="Settings" subtitle="Preferences & permissions" testID="settings-title" />
+
+        <Text style={styles.section}>Account</Text>
+        <View testID="settings-account-card" style={styles.account}>
+          {user?.picture ? (
+            <Image source={{ uri: user.picture }} style={styles.avatar} contentFit="cover" />
+          ) : (
+            <View style={[styles.avatar, { alignItems: "center", justifyContent: "center" }]}>
+              <Feather name="user" size={20} color={colors.onSurfaceTertiary} />
+            </View>
+          )}
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text testID="settings-account-name" style={styles.accountName} numberOfLines={1}>
+              {user?.name || "Signed in"}
+            </Text>
+            <Text testID="settings-account-email" style={styles.accountEmail} numberOfLines={1}>
+              {user?.email}
+            </Text>
+            <Text style={styles.accountSync}>
+              <Feather name="refresh-cw" size={10} color={colors.success} /> Quotes sync across your phones
+            </Text>
+          </View>
+        </View>
+        <View style={{ paddingHorizontal: 24, marginTop: 12 }}>
+          <Button testID="settings-sign-out-button" label="Sign out" icon="log-out" variant="ghost" onPress={signOut} />
+        </View>
 
         <Text style={styles.section}>Permissions</Text>
         <Row testID="settings-camera-permission-row" icon="camera" label="Camera" value={camStatus} onPress={Platform.OS === "web" ? undefined : onCameraRow} />
@@ -79,6 +108,21 @@ export default function SettingsScreen() {
 
 const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
+  account: {
+    marginHorizontal: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    padding: 16,
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 4,
+  },
+  avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surfaceTertiary },
+  accountName: { fontFamily: "Cormorant", fontSize: 20, color: colors.onSurfaceSecondary },
+  accountEmail: { fontFamily: "DMSans", fontSize: 13, color: colors.muted },
+  accountSync: { fontFamily: "DMSans", fontSize: 11, color: colors.success, marginTop: 2 },
   section: { fontFamily: "Cormorant", fontSize: 22, color: colors.onSurface, paddingHorizontal: 24, marginTop: 24, marginBottom: 8 },
   row: {
     flexDirection: "row",

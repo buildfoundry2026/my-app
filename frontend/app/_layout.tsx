@@ -4,13 +4,15 @@ import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { LogBox } from "react-native";
+import { ActivityIndicator, LogBox, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 
+import { AuthProvider, useAuth } from "@/src/auth";
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { ToastHost } from "@/src/components/ui";
 import { queryClient } from "@/src/query-client";
+import { toast } from "@/src/store";
 import { useTheme } from "@/src/theme";
 
 // Disable logbox errors etc so that users can see the app
@@ -18,6 +20,43 @@ import { useTheme } from "@/src/theme";
 LogBox.ignoreAllLogs(true);
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+// Single auth gate: null -> /login, authenticated -> app.
+function AuthGate() {
+  const { loading, user, lastMerged } = useAuth();
+  const { colors } = useTheme();
+
+  useEffect(() => {
+    if (user) {
+      queryClient.invalidateQueries({ queryKey: ["quotes"] });
+      if (lastMerged > 0) toast(`${lastMerged} quote${lastMerged === 1 ? "" : "s"} from this device merged into your account.`, "success");
+    } else {
+      queryClient.clear();
+    }
+  }, [user, lastMerged]);
+
+  if (loading) {
+    return (
+      <View testID="auth-loading" style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface }}>
+        <ActivityIndicator color={colors.brandPrimary} />
+      </View>
+    );
+  }
+
+  return (
+    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
+      <Stack.Protected guard={!user}>
+        <Stack.Screen name="login" options={{ animation: "fade" }} />
+      </Stack.Protected>
+      <Stack.Protected guard={!!user}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="crop" options={{ animation: "fade" }} />
+        <Stack.Screen name="editor" options={{ animation: "slide_from_right" }} />
+      </Stack.Protected>
+    </Stack>
+  );
+}
 
 export default function RootLayout() {
   const { colors } = useTheme();
@@ -39,17 +78,15 @@ export default function RootLayout() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.surface }}>
-          <KeyboardProvider>
-            <StatusBar style="dark" />
-            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="crop" options={{ animation: "fade" }} />
-              <Stack.Screen name="editor" options={{ animation: "slide_from_right" }} />
-            </Stack>
-            <ToastHost />
-          </KeyboardProvider>
-        </GestureHandlerRootView>
+        <AuthProvider>
+          <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.surface }}>
+            <KeyboardProvider>
+              <StatusBar style="dark" />
+              <AuthGate />
+              <ToastHost />
+            </KeyboardProvider>
+          </GestureHandlerRootView>
+        </AuthProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   );
