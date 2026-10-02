@@ -71,20 +71,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Expo Go: exp://<lan-ip>:<metro-port>. Builds: frontend:// (app.json scheme).
       // Supabase only honours redirectTo if it matches the dashboard's Redirect URLs
       // allow list; otherwise it silently falls back to the Site URL (localhost).
-      const redirectTo = makeRedirectUri({ scheme: "frontend" });
-      if (__DEV__) console.log(`[auth] OAuth redirectTo: ${redirectTo}`);
+      const redirectUrl = makeRedirectUri();
+      if (__DEV__) console.log(`[auth] OAuth redirectTo: ${redirectUrl}`);
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo, skipBrowserRedirect: true },
+        options: { redirectTo: redirectUrl, skipBrowserRedirect: true },
       });
       if (error) throw error;
-      const res = await WebBrowser.openAuthSessionAsync(data?.url ?? "", redirectTo);
+      const res = await WebBrowser.openAuthSessionAsync(data?.url ?? "", redirectUrl);
       if (res.type === "success") {
         const created = await createSessionFromUrl(res.url);
         if (!created) throw new Error("Sign-in didn't return a session.");
       } else if (__DEV__) {
         console.warn(
-          `[auth] Sign-in browser closed without returning to the app. If it landed on localhost, add ${redirectTo} to Supabase > Authentication > URL Configuration > Redirect URLs.`,
+          `[auth] Sign-in browser closed without returning to the app. If it landed on localhost, add ${redirectUrl} to Supabase > Authentication > URL Configuration > Redirect URLs.`,
         );
       }
     } catch (e: any) {
