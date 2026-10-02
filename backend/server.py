@@ -22,6 +22,10 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 
+# "Improve with AI" guardrails
+DAILY_AI_LIMIT = 50                       # AI transcriptions per user per UTC day
+MAX_IMAGE_BYTES = 2 * 1024 * 1024         # ~2 MB cap on the (decoded) image sent for AI
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -132,6 +136,7 @@ async def ensure_indexes():
     await db.user_sessions.create_index("user_id")
     await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
     await db.quotes.create_index([("user_id", 1), ("created_at", -1)])
+    await db.ai_usage.create_index([("user_id", 1), ("date", 1)], unique=True)
 
 
 @api_router.post("/auth/session", response_model=SessionResponse)
@@ -214,6 +219,16 @@ class OcrResponse(BaseModel):
     text: str
     word_count: int
     message: Optional[str] = None
+    remaining: Optional[int] = None
+
+
+def _utc_date() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+async def _ai_used_today(user_id: str) -> int:
+    doc = await db.ai_usage.find_one({"user_id": user_id, "date": _utc_date()})
+    return int(doc["count"]) if doc else 0
 
 
 OCR_SYSTEM = (
@@ -231,8 +246,14 @@ async def root():
     return {"message": "QuoteCanvas API"}
 
 
+@api_router.get("/ai/usage")
+async def ai_usage(user: User = Depends(get_current_user)):
+    used = await _ai_used_today(user.user_id)
+    return {"limit": DAILY_AI_LIMIT, "used": used, "remaining": max(0, DAILY_AI_LIMIT - used), "date": _utc_date()}
+
+
 @api_router.post("/ocr", response_model=OcrResponse)
-async def ocr(req: OcrRequest):
+async def ocr(req: OcrRequest, user: User = Depends(get_current_user)):
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="OCR service not configured")
     b64 = req.image_base64
@@ -240,6 +261,14 @@ async def ocr(req: OcrRequest):
         b64 = b64.split(",", 1)[1]
     if len(b64) < 100:
         raise HTTPException(status_code=400, detail="Invalid image")
+    # Size cap: never accept an oversized payload (keeps it fast, bounded, no storage).
+    if (len(b64) * 3) // 4 > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image is too large. Crop a tighter area and try again.")
+
+    # Daily limit (resets at midnight UTC).
+    used = await _ai_used_today(user.user_id)
+    if used >= DAILY_AI_LIMIT:
+        raise HTTPException(status_code=429, detail="Daily AI limit reached. Try again tomorrow.")
 
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
@@ -262,15 +291,21 @@ async def ocr(req: OcrRequest):
         logger.exception("OCR failed")
         raise HTTPException(status_code=502, detail=f"OCR failed: {e}")
 
+    # Count the call against the daily limit (the LLM was invoked). Image is never stored.
+    await db.ai_usage.update_one(
+        {"user_id": user.user_id, "date": _utc_date()}, {"$inc": {"count": 1}}, upsert=True
+    )
+    remaining = max(0, DAILY_AI_LIMIT - (used + 1))
+
     text = "".join(chunks).strip()
     if text.upper().startswith("NO_TEXT"):
-        return OcrResponse(ok=False, text="", word_count=0,
+        return OcrResponse(ok=False, text="", word_count=0, remaining=remaining,
                            message="Text unclear. Please try capturing again in better light.")
     words = [w for w in text.split() if w.strip()]
     if len(words) < 3:
-        return OcrResponse(ok=False, text=text, word_count=len(words),
+        return OcrResponse(ok=False, text=text, word_count=len(words), remaining=remaining,
                            message="Text unclear. Please try capturing again in better light.")
-    return OcrResponse(ok=True, text=text, word_count=len(words))
+    return OcrResponse(ok=True, text=text, word_count=len(words), remaining=remaining)
 
 
 @api_router.post("/quotes", response_model=Quote)

@@ -27,7 +27,9 @@ export type SavedQuote = {
   created_at: string;
 };
 
-export type OcrResult = { ok: boolean; text: string; word_count: number; message?: string | null };
+export type OcrResult = { ok: boolean; text: string; word_count: number; message?: string | null; remaining?: number | null };
+
+export type AiUsage = { limit: number; used: number; remaining: number; date: string };
 
 const DEVICE_KEY = "qc.device_id";
 let cachedDeviceId: string | null = null;
@@ -82,6 +84,8 @@ export const api = {
   ocr: (image_base64: string) =>
     request<OcrResult>("/ocr", { method: "POST", body: JSON.stringify({ image_base64 }) }),
 
+  aiUsage: () => request<AiUsage>("/ai/usage"),
+
   listQuotes: () => request<SavedQuote[]>("/quotes"),
 
   createQuote: async (body: {
@@ -100,27 +104,3 @@ export const api = {
 
   deleteQuote: (id: string) => request<{ ok: boolean }>(`/quotes/${id}`, { method: "DELETE" }),
 };
-
-// ---- Offline queue of cropped images awaiting OCR ----
-export type QueuedCapture = { id: string; uri: string; base64: string; created_at: string };
-const QUEUE_KEY = "qc.unprocessed";
-
-export async function getQueue(): Promise<QueuedCapture[]> {
-  const raw = await storage.getItem(QUEUE_KEY, "[]");
-  try {
-    return JSON.parse(raw ?? "[]") as QueuedCapture[];
-  } catch {
-    return [];
-  }
-}
-
-export async function enqueueCapture(item: QueuedCapture) {
-  const q = await getQueue();
-  q.unshift(item);
-  await storage.setItem(QUEUE_KEY, JSON.stringify(q.slice(0, 10)));
-}
-
-export async function dequeueCapture(id: string) {
-  const q = await getQueue();
-  await storage.setItem(QUEUE_KEY, JSON.stringify(q.filter((i) => i.id !== id)));
-}

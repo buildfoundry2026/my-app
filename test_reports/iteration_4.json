@@ -1,0 +1,29 @@
+{
+  "summary": "Comprehensive backend testing of the new auth-gated /api/ocr endpoint and companion /api/ai/usage. Extended /app/backend/tests/test_api.py with a dedicated TestOcrAndAiUsage class (9 new tests) that seeds its own isolated user+session and manipulates db.ai_usage directly to avoid 50 real LLM calls. 28/28 pytest tests PASS end-to-end against the public preview URL. Verified: (1) /api/ocr returns 401 without a Bearer token AND with an invalid token; (2) /api/ai/usage returns 401 unauthenticated; (3) /api/ai/usage shape is {limit:50, used, remaining, date=UTC YYYY-MM-DD} and remaining reflects a seeded ai_usage count; (4) decoded payload > 2MB → HTTP 413 (checked BEFORE LLM, usage NOT incremented); (5) pre-seeding ai_usage with count=50 → next /api/ocr returns HTTP 429 and count stays at 50 (LLM not called); (6) a real successful /api/ocr call with EMERGENT_LLM_KEY seeded at count=10 returned 200 with ok=true, word_count>=3, remaining=39 and incremented ai_usage to exactly 11; (7) no image storage — the only collections present after the OCR call are {quotes, users, user_sessions, ai_usage}, no images/ocr_images collection was created, and no quote doc was inserted as a side effect; (8) existing quotes CRUD + cross-user isolation + soft delete + logout all still pass with Bearer auth.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py: _ai_used_today reads doc['count'] after find_one; safe because the find+increment is upsert($inc) and the key is only read when a doc exists. OK.",
+    "server.py /api/ocr: the daily-limit check happens BEFORE the LLM call, and the ai_usage $inc happens only AFTER a successful stream; this is correct — rejected calls (413/429) do not consume quota. Confirmed in tests.",
+    "server.py uses deprecated FastAPI @app.on_event('startup'/'shutdown') — cosmetic migration to lifespan handlers would be cleaner but is not a bug.",
+    "server.py index creation on startup includes ai_usage unique(user_id,date); matches the ($inc, upsert=True) usage pattern — concurrency safe.",
+    "pytest.ini pins -n 2 --dist loadscope, but loadscope groups by CLASS so the module-scope autouse `seed` fixture races on the users.email unique index. The next testing agent must run this suite with `pytest -n 0` (serial), as this iteration did, or convert `seed` to session-scope with a file-lock. The suite is deterministic serially."
+  ],
+  "updated_files": ["/app/backend/tests/test_api.py"],
+  "success_rate": {"backend": "100%", "frontend": "N/A (not in scope)"},
+  "seed_data_creation": "TestOcrAndAiUsage uses an isolated user TEST_user_ocr + session TEST_token_ocr_<hex> inserted at class setup; db.ai_usage is manipulated per test (reset to 0, seeded to 37, seeded to 50, seeded to 10) to exercise usage/429/success paths without 50 real LLM calls. Full teardown removes the user, session, and all ai_usage rows for that user. Existing TEST_user_a / TEST_user_b fixtures are unchanged.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run with `pytest -n 0 /app/backend/tests/test_api.py` (xdist loadscope groups by class and the module-scope `seed` fixture races on the users.email unique index — this is documented and reproducible). All /api/ocr tests live in TestOcrAndAiUsage which seeds its own user/session (TEST_user_ocr / TEST_token_ocr_*) and resets db.ai_usage before each test; it is safe to re-run repeatedly on the same day without exhausting the real daily limit because 429 and 413 paths are proven not to call the LLM. The 'success' test is the only one that consumes 1 real EMERGENT_LLM_KEY unit per run. EXPO_PUBLIC_BACKEND_URL lives in /app/frontend/.env and is loaded by the test module via load_dotenv.",
+  "rca_of_issue": "N/A — no bugs found. New auth gating, size cap, daily limit, usage endpoint and no-storage behavior all match the spec."
+}

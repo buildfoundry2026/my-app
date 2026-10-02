@@ -1,4 +1,3 @@
-import NetInfo from "@react-native-community/netinfo";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
@@ -9,8 +8,8 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api, enqueueCapture } from "@/src/api";
 import { Button, IconButton, SkeletonParagraph } from "@/src/components/ui";
+import { onDeviceOcrAvailable, recognizeOnDevice } from "@/src/ocr";
 import { toast, useDraft } from "@/src/store";
 import { makeStyles, useTheme } from "@/src/theme";
 
@@ -124,27 +123,29 @@ export default function CropScreen() {
       ctx.crop({ originX, originY, width, height });
       if (width > 1600) ctx.resize({ width: 1600 });
       const rendered = await ctx.renderAsync();
-      const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.85, base64: true });
-      const base64 = saved.base64 ?? "";
+      const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.85 });
 
-      const net = await NetInfo.fetch();
-      if (net.isConnected === false || net.isInternetReachable === false) {
-        await enqueueCapture({ id: `q-${Date.now()}`, uri: saved.uri, base64, created_at: new Date().toISOString() });
-        toast("You're offline. Saved to your unprocessed queue.", "info");
-        router.replace("/(tabs)/history");
-        return;
+      // Default scan runs fully on-device (instant, offline, private). The cropped
+      // image URI rides along so the editor can offer an optional "Improve with AI".
+      let text = "";
+      if (onDeviceOcrAvailable) {
+        try {
+          text = (await recognizeOnDevice(saved.uri)).slice(0, 500);
+        } catch {
+          text = "";
+        }
+        if (!text) {
+          toast("No text found. You can type it in or tap Improve with AI.", "info");
+        }
+      } else {
+        toast("On-device scanning needs a device build. Type it in or use Improve with AI.", "info");
       }
 
-      const result = await api.ocr(base64);
-      if (!result.ok) {
-        toast(result.message ?? "Text unclear. Please try capturing again in better light.", "error");
-        return;
-      }
-      setDraft({ id: null, ocrText: result.text.slice(0, 500) });
+      setDraft({ id: null, ocrText: text, imageUri: saved.uri });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       router.replace("/editor");
-    } catch (e: any) {
-      toast(e?.message?.includes("Network") ? "No connection. Try again when online." : "Couldn't extract text. Please retry.", "error");
+    } catch {
+      toast("Couldn't read the page. Please retry.", "error");
     } finally {
       setProcessing(false);
     }
@@ -201,7 +202,7 @@ export default function CropScreen() {
         {processing ? (
           <View testID="ocr-processing-overlay" style={styles.processing}>
             <View style={styles.processingCard}>
-              <Text style={styles.processingTitle}>Reading the page…</Text>
+              <Text style={styles.processingTitle}>Reading on your device…</Text>
               <SkeletonParagraph lines={6} light />
             </View>
           </View>

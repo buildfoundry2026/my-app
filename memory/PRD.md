@@ -30,3 +30,11 @@ Mobile app (iOS/Android, Expo) that turns photos of physical book pages into aes
 ## Notes
 - Camera/crop/share/save-to-photos are device-only features; web preview shows permission fallback.
 - Test credentials: none (see `/app/memory/test_credentials.md`).
+
+## Update — On-device scanning + AI fallback (June 2026)
+- Default scan is now on-device via Google ML Kit (`@infinitered/react-native-mlkit-text-recognition`, `src/ocr.ts`). Instant, offline, private, no network/key. Native-only: works only in a real dev/prod build, NOT Expo Go / web preview.
+- AI vision is now an opt-in "Improve with AI" action in the editor (shows on-device vs AI text side-by-side; user picks one). Requires the cropped image (`draft.imageUri`).
+- `POST /api/ocr` is now gated: requires sign-in, daily limit 50/user/UTC-day (`ai_usage` collection), ~2MB size cap (HTTP 413), over-limit HTTP 429, image processed in-memory only (never stored). `GET /api/ai/usage` returns remaining.
+- App is now usable signed-out: anonymous users can scan on-device + edit/export, but cannot save to history or use Improve with AI (prompted to sign in). History/Settings show sign-in prompts when signed out.
+- Retired the offline "unprocessed queue" (recognition is local now).
+- Backend verified: 28/28 pytest pass.

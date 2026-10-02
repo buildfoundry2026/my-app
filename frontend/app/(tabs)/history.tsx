@@ -2,12 +2,13 @@ import Feather from "@react-native-vector-icons/feather";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import { useRouter } from "expo-router";
+import React from "react";
 import { FlatList, Pressable, RefreshControl, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api, dequeueCapture, getQueue, QueuedCapture, SavedQuote } from "@/src/api";
+import { api, SavedQuote } from "@/src/api";
+import { useAuth } from "@/src/auth";
 import { CanvasRenderer } from "@/src/components/CanvasRenderer";
 import { Button, ScreenTitle } from "@/src/components/ui";
 import { usesNativeTabs } from "@/src/navigation";
@@ -27,16 +28,9 @@ export default function HistoryScreen() {
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
   const setDraft = useDraft((s) => s.setDraft);
   const queryClient = useQueryClient();
-  const [queue, setQueue] = useState<QueuedCapture[]>([]);
-  const [processingId, setProcessingId] = useState<string | null>(null);
+  const { user } = useAuth();
 
-  const quotesQuery = useQuery({ queryKey: ["quotes"], queryFn: api.listQuotes });
-
-  useFocusEffect(
-    useCallback(() => {
-      getQueue().then(setQueue);
-    }, []),
-  );
+  const quotesQuery = useQuery({ queryKey: ["quotes"], queryFn: api.listQuotes, enabled: !!user });
 
   const deleteMutation = useMutation({
     mutationFn: api.deleteQuote,
@@ -55,29 +49,9 @@ export default function HistoryScreen() {
       author: q.author ?? "",
       selectedTemplate: q.template_used,
       aspectRatio: q.aspect_ratio ?? "4:5",
+      imageUri: null,
     });
     router.push("/editor");
-  };
-
-  const processQueued = async (item: QueuedCapture) => {
-    setProcessingId(item.id);
-    try {
-      const res = await api.ocr(item.base64);
-      if (!res.ok) {
-        toast(res.message ?? "Text unclear. Please try capturing again in better light.", "error");
-        await dequeueCapture(item.id);
-        setQueue(await getQueue());
-        return;
-      }
-      await dequeueCapture(item.id);
-      setQueue(await getQueue());
-      setDraft({ id: null, ocrText: res.text.slice(0, 500), bookTitle: "", author: "", selectedTemplate: "minimalist-dark", aspectRatio: "4:5" });
-      router.push("/editor");
-    } catch {
-      toast("Still offline or server unreachable. Try again later.", "error");
-    } finally {
-      setProcessingId(null);
-    }
   };
 
   const cardW = (width - 24 * 2 - 16) / 2;
@@ -86,30 +60,22 @@ export default function HistoryScreen() {
   const header = (
     <View>
       <ScreenTitle title="Your clippings" subtitle={quotes.length ? `${quotes.length} saved quote${quotes.length === 1 ? "" : "s"}` : undefined} testID="history-title" />
-      {queue.length ? (
-        <View testID="unprocessed-queue" style={styles.queue}>
-          <View style={styles.queueHeader}>
-            <Feather name="wifi-off" size={16} color={colors.onBrandTertiary} />
-            <Text style={styles.queueTitle}>Unprocessed captures ({queue.length})</Text>
-          </View>
-          {queue.map((item) => (
-            <View key={item.id} style={styles.queueRow}>
-              <Image source={{ uri: item.uri }} style={styles.queueThumb} contentFit="cover" />
-              <Text style={styles.queueDate}>{new Date(item.created_at).toLocaleString()}</Text>
-              <Button
-                testID={`queue-process-${item.id}`}
-                label="Extract"
-                variant="secondary"
-                onPress={() => processQueued(item)}
-                loading={processingId === item.id}
-                style={{ minHeight: 40, paddingHorizontal: 14 }}
-              />
-            </View>
-          ))}
-        </View>
-      ) : null}
     </View>
   );
+
+  if (!user) {
+    return (
+      <View testID="history-signed-out" style={styles.empty}>
+        <Image source={{ uri: EMPTY_IMAGE }} style={styles.emptyImage} contentFit="cover" transition={300} />
+        <LinearGradient colors={["transparent", colors.surfaceInverse]} locations={[0, 0.72]} style={styles.emptyImage} />
+        <View style={[styles.emptyContent, { paddingBottom: bottomChrome + 32, paddingTop: insets.top }]}>
+          <Text style={styles.emptyTitle}>Keep your quotes forever.</Text>
+          <Text style={styles.emptyBody}>Sign in to save styled quotes to your history and sync them across your phones.</Text>
+          <Button testID="history-signin-button" label="Sign in" icon="log-in" onPress={() => router.push("/login")} />
+        </View>
+      </View>
+    );
+  }
 
   if (quotesQuery.isLoading) {
     return (
@@ -136,7 +102,7 @@ export default function HistoryScreen() {
     );
   }
 
-  if (!quotes.length && !queue.length) {
+  if (!quotes.length) {
     return (
       <View testID="history-empty" style={styles.empty}>
         <Image source={{ uri: EMPTY_IMAGE }} style={styles.emptyImage} contentFit="cover" transition={300} />
@@ -206,12 +172,6 @@ const useStyles = makeStyles((colors) => ({
   cardSub: { fontFamily: "DMSans", fontSize: 12, color: colors.muted, flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
   errorText: { fontFamily: "DMSans", fontSize: 15, color: colors.onSurface },
-  queue: { marginHorizontal: 24, marginBottom: 20, backgroundColor: colors.brandTertiary, padding: 16, borderRadius: 4, gap: 12 },
-  queueHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-  queueTitle: { fontFamily: "DMSans", fontSize: 13, fontWeight: "600", color: colors.onBrandTertiary },
-  queueRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  queueThumb: { width: 44, height: 44, borderRadius: 2, backgroundColor: colors.surfaceTertiary },
-  queueDate: { flex: 1, fontFamily: "DMSans", fontSize: 12, color: colors.onBrandTertiary },
   empty: { flex: 1, backgroundColor: colors.surfaceInverse },
   emptyImage: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   emptyContent: { flex: 1, justifyContent: "flex-end", paddingHorizontal: 24, gap: 12 },

@@ -9,6 +9,9 @@ export type QuoteDraft = {
   author: string;
   selectedTemplate: TemplateId;
   aspectRatio: AspectRatio;
+  // Local URI of the cropped page image. Enables the editor's "Improve with AI"
+  // action to re-send the page. Null when a draft is opened from saved history.
+  imageUri: string | null;
 };
 
 type DraftState = QuoteDraft & {
@@ -23,6 +26,7 @@ const initial: QuoteDraft = {
   author: "",
   selectedTemplate: "minimalist-dark",
   aspectRatio: "4:5",
+  imageUri: null,
 };
 
 export const useDraft = create<DraftState>((set) => ({

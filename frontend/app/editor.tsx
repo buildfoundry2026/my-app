@@ -1,15 +1,18 @@
+import NetInfo from "@react-native-community/netinfo";
 import Feather from "@react-native-vector-icons/feather";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import React, { useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { KeyboardAwareScrollView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ViewShot, { captureRef } from "react-native-view-shot";
 
 import { api } from "@/src/api";
+import { useAuth } from "@/src/auth";
 import { CanvasRenderer } from "@/src/components/CanvasRenderer";
 import { Button, IconButton } from "@/src/components/ui";
 import { toast, useDraft } from "@/src/store";
@@ -30,9 +33,20 @@ export default function EditorScreen() {
   const { width: screenW, height: screenH } = useWindowDimensions();
   const draft = useDraft();
   const setDraft = useDraft((s) => s.setDraft);
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const shotRef = useRef<React.ComponentRef<typeof ViewShot>>(null);
   const [exporting, setExporting] = useState(false);
+  const [improving, setImproving] = useState(false);
+  const [compare, setCompare] = useState<{ onDevice: string; ai: string } | null>(null);
+
+  const usageQuery = useQuery({ queryKey: ["ai-usage"], queryFn: api.aiUsage, enabled: !!user });
+  const aiRemaining = usageQuery.data?.remaining;
+
+  const promptSignIn = (message: string) => {
+    toast(message, "info");
+    router.push("/login");
+  };
 
   const template = getTemplate(draft.selectedTemplate);
   const previewH = screenH * 0.42;
@@ -61,6 +75,7 @@ export default function EditorScreen() {
       toast("Add some text to your quote first.", "error");
       return false;
     }
+    if (!user) return true; // anonymous: export locally, cloud save is gated below
     try {
       await saveMutation.mutateAsync();
       return true;
@@ -71,8 +86,63 @@ export default function EditorScreen() {
   };
 
   const onSave = async () => {
+    if (!draft.ocrText.trim()) {
+      toast("Add some text to your quote first.", "error");
+      return;
+    }
+    if (!user) {
+      promptSignIn("Sign in to save this quote to your history.");
+      return;
+    }
     const ok = await ensureSaved();
     if (ok && !saveMutation.isError) toast("Saved to your history.", "success");
+  };
+
+  const onImprove = async () => {
+    if (improving) return;
+    if (!draft.imageUri) {
+      toast("Scan a page first to use AI.", "error");
+      return;
+    }
+    if (!user) {
+      promptSignIn("Sign in to use Improve with AI.");
+      return;
+    }
+    const net = await NetInfo.fetch();
+    if (net.isConnected === false || net.isInternetReachable === false) {
+      toast("Improve with AI needs a connection.", "error");
+      return;
+    }
+    if (typeof aiRemaining === "number" && aiRemaining <= 0) {
+      toast("Daily AI limit reached. Try again tomorrow.", "error");
+      return;
+    }
+    setImproving(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    try {
+      // Downscale the crop client-side so we stay well under the server's ~2 MB cap.
+      const ctx = ImageManipulator.manipulate(draft.imageUri);
+      ctx.resize({ width: 1500 });
+      const rendered = await ctx.renderAsync();
+      const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.6, base64: true });
+      const res = await api.ocr(saved.base64 ?? "");
+      queryClient.invalidateQueries({ queryKey: ["ai-usage"] });
+      if (!res.ok) {
+        toast(res.message ?? "AI couldn't read this page clearly.", "error");
+        return;
+      }
+      setCompare({ onDevice: draft.ocrText.trim(), ai: res.text.slice(0, MAX_QUOTE_CHARS) });
+    } catch (e: any) {
+      toast(e?.message || "Improve with AI failed. Please try again.", "error");
+    } finally {
+      setImproving(false);
+    }
+  };
+
+  const acceptVersion = (text: string) => {
+    setDraft({ ocrText: text.slice(0, MAX_QUOTE_CHARS) });
+    setCompare(null);
+    Haptics.selectionAsync().catch(() => {});
   };
 
   const exportImage = async (): Promise<string | null> => {
@@ -249,6 +319,29 @@ export default function EditorScreen() {
           </Text>
         ) : null}
 
+        {draft.imageUri ? (
+          <View style={styles.aiBlock}>
+            <Button
+              testID="editor-improve-ai-button"
+              label="Improve with AI"
+              icon="zap"
+              variant="secondary"
+              onPress={onImprove}
+              loading={improving}
+              disabled={typeof aiRemaining === "number" && aiRemaining <= 0}
+            />
+            <Text testID="editor-ai-hint" style={styles.aiHint}>
+              {!user
+                ? "Sign in to re-scan this page with AI for a cleaner transcription."
+                : typeof aiRemaining === "number"
+                  ? aiRemaining > 0
+                    ? `Re-scan with AI · ${aiRemaining} left today`
+                    : "Daily AI limit reached — try again tomorrow."
+                  : "Re-scan this page with AI for a cleaner transcription."}
+            </Text>
+          </View>
+        ) : null}
+
         <Text style={styles.sectionLabel}>BOOK TITLE</Text>
         <TextInput
           testID="editor-book-title-input"
@@ -282,6 +375,33 @@ export default function EditorScreen() {
           <Button testID="editor-export-button" label="Export & Share" icon="share" onPress={onShare} loading={exporting} />
         </View>
       </KeyboardStickyView>
+
+      {/* Improve-with-AI comparison */}
+      <Modal visible={!!compare} transparent animationType="fade" onRequestClose={() => setCompare(null)}>
+        <View style={styles.modalBackdrop}>
+          <View testID="ai-compare-modal" style={[styles.modalCard, { paddingBottom: insets.bottom + 16, maxHeight: screenH * 0.8 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Pick the better version</Text>
+              <IconButton testID="ai-compare-close" icon="x" onPress={() => setCompare(null)} />
+            </View>
+            <ScrollView contentContainerStyle={{ gap: 16 }} showsVerticalScrollIndicator={false}>
+              <View style={styles.versionCard}>
+                <Text style={styles.versionLabel}>ON DEVICE</Text>
+                <Text testID="ai-ondevice-text" style={styles.versionText}>{compare?.onDevice || "— no text —"}</Text>
+                <Button testID="ai-use-ondevice" label="Keep this" variant="ghost" onPress={() => acceptVersion(compare?.onDevice ?? "")} />
+              </View>
+              <View style={[styles.versionCard, styles.versionCardAi]}>
+                <View style={styles.aiBadgeRow}>
+                  <Feather name="zap" size={12} color={colors.brandPrimary} />
+                  <Text style={[styles.versionLabel, { color: colors.brandPrimary }]}>AI TRANSCRIPTION</Text>
+                </View>
+                <Text testID="ai-ai-text" style={styles.versionText}>{compare?.ai || "— no text —"}</Text>
+                <Button testID="ai-use-ai" label="Use AI version" icon="zap" onPress={() => acceptVersion(compare?.ai ?? "")} />
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -340,6 +460,31 @@ const useStyles = makeStyles((colors) => ({
   },
   multiline: { minHeight: 120, lineHeight: 22 },
   warning: { fontFamily: "DMSans", fontSize: 12, color: colors.error, marginTop: 8 },
+  aiBlock: { marginTop: 20, gap: 8 },
+  aiHint: { fontFamily: "DMSans", fontSize: 12, color: colors.muted, textAlign: "center" },
+  modalBackdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: "flex-end" },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    gap: 12,
+  },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  modalTitle: { fontFamily: "Cormorant", fontSize: 24, color: colors.onSurface },
+  versionCard: {
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    padding: 16,
+    gap: 12,
+  },
+  versionCardAi: { borderColor: colors.brandPrimary },
+  aiBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  versionLabel: { fontFamily: "DMSans", fontSize: 11, letterSpacing: 1.6, color: colors.muted },
+  versionText: { fontFamily: "DMSans", fontSize: 14, lineHeight: 21, color: colors.onSurface },
   linkRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 24, minHeight: 44 },
   linkText: { fontFamily: "DMSans", fontSize: 14, fontWeight: "600", color: colors.brandPrimary },
   cta: {

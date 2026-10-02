@@ -1,11 +1,13 @@
 import Feather from "@react-native-vector-icons/feather";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import React from "react";
+import { useRouter } from "expo-router";
+import React, { useEffect } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAuth } from "@/src/auth";
+import { IconButton } from "@/src/components/ui";
 import { makeStyles, useTheme } from "@/src/theme";
 
 const IMAGE =
@@ -15,20 +17,34 @@ export default function LoginScreen() {
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { signIn, signingIn } = useAuth();
+  const router = useRouter();
+  const { signIn, signingIn, user } = useAuth();
+
+  // Dismiss automatically once sign-in completes.
+  useEffect(() => {
+    if (user) {
+      if (router.canGoBack()) router.back();
+      else router.replace("/(tabs)");
+    }
+  }, [user, router]);
+
+  const close = () => (router.canGoBack() ? router.back() : router.replace("/(tabs)"));
 
   return (
     <View testID="login-screen" style={styles.root}>
       <Image source={{ uri: IMAGE }} style={styles.image} contentFit="cover" transition={300} />
       <LinearGradient colors={["transparent", colors.surfaceInverse]} locations={[0, 0.7]} style={styles.image} />
       <View style={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}>
-        <Text style={styles.brand}>QuoteCanvas</Text>
+        <View style={styles.topRow}>
+          <Text style={styles.brand}>QuoteCanvas</Text>
+          <IconButton testID="login-close-button" icon="x" color={colors.onSurfaceInverse} onPress={close} />
+        </View>
         <View style={{ flex: 1 }} />
         <Text style={styles.eyebrow}>SNAP · CROP · STYLE · SHARE</Text>
         <Text style={styles.title}>Your favourite lines, beautifully kept.</Text>
         <Text style={styles.body}>
-          Sign in so your quote history follows you across phones. Quotes already on this device will be merged into
-          your account.
+          Sign in to save quotes to your history, sync across phones, and unlock Improve with AI. Quotes already on this
+          device will be merged into your account.
         </Text>
         <Pressable
           testID="login-google-button"
@@ -55,6 +71,7 @@ const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surfaceInverse },
   image: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   content: { flex: 1, paddingHorizontal: 24, gap: 12 },
+  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   brand: { fontFamily: "Cormorant", fontSize: 28, color: colors.onSurfaceInverse },
   eyebrow: { fontFamily: "DMSans", fontSize: 12, letterSpacing: 2, color: colors.brandTertiary },
   title: { fontFamily: "Cormorant", fontSize: 42, lineHeight: 46, color: colors.onSurfaceInverse },

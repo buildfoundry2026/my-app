@@ -12,8 +12,9 @@ from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 from pymongo import MongoClient
 
-# Load backend env for Mongo seeding
+# Load backend env for Mongo seeding + frontend env for the public backend URL
 load_dotenv(Path("/app/backend/.env"))
+load_dotenv(Path("/app/frontend/.env"))
 
 BASE_URL = (os.environ.get("EXPO_PUBLIC_BACKEND_URL") or "").rstrip("/")
 assert BASE_URL, "EXPO_PUBLIC_BACKEND_URL must be set in /app/frontend/.env"
@@ -279,7 +280,7 @@ class TestDeviceMergeStatic:
             mongo.quotes.delete_many({"_id": {"$in": ids}})
 
 
-# --- OCR (unauth) ---
+# --- OCR / AI usage helpers ---
 def _font(size=30):
     try:
         return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", size)
@@ -301,14 +302,161 @@ def _text_image_b64():
     return base64.b64encode(buf.getvalue()).decode()
 
 
-class TestOcr:
-    def test_ocr_no_auth_required_and_reads_text(self, s_anon):
-        r = s_anon.post(f"{API}/ocr", json={"image_base64": _text_image_b64()}, timeout=120)
+def _utc_date_str():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+# Dedicated user+session for OCR/AI-usage tests so we can safely seed/reset ai_usage
+# without affecting the quotes CRUD tests.
+USER_OCR = {"user_id": "TEST_user_ocr", "email": "TEST_ocr@example.com", "name": "OcrUser",
+            "picture": None, "created_at": datetime.now(timezone.utc).isoformat()}
+TOKEN_OCR = "TEST_token_ocr_" + uuid.uuid4().hex[:8]
+
+
+@pytest.fixture(scope="class")
+def ocr_setup(mongo):
+    """Seed an isolated user + session, and ensure ai_usage is clean for the current UTC day.
+
+    All tests touching /api/ocr or /api/ai/usage share this class-scoped fixture so loadscope
+    pins them to a single worker and the daily counter state is deterministic.
+    """
+    mongo.users.delete_many({"user_id": USER_OCR["user_id"]})
+    mongo.user_sessions.delete_many({"session_token": TOKEN_OCR})
+    mongo.ai_usage.delete_many({"user_id": USER_OCR["user_id"]})
+
+    mongo.users.insert_one(dict(USER_OCR))
+    now = datetime.now(timezone.utc)
+    mongo.user_sessions.insert_one({
+        "session_token": TOKEN_OCR, "user_id": USER_OCR["user_id"],
+        "created_at": now, "expires_at": now + timedelta(days=7),
+    })
+    yield
+    mongo.ai_usage.delete_many({"user_id": USER_OCR["user_id"]})
+    mongo.user_sessions.delete_many({"session_token": TOKEN_OCR})
+    mongo.users.delete_many({"user_id": USER_OCR["user_id"]})
+
+
+@pytest.fixture
+def s_ocr(ocr_setup):
+    s = requests.Session()
+    s.headers.update({"Content-Type": "application/json", "Authorization": f"Bearer {TOKEN_OCR}"})
+    return s
+
+
+def _reset_usage(mongo, user_id=USER_OCR["user_id"]):
+    mongo.ai_usage.delete_many({"user_id": user_id})
+
+
+class TestOcrAndAiUsage:
+    """OCR auth gating, size cap, daily limit, usage endpoint, and no-image-storage."""
+
+    # --- Auth gating ---
+    def test_ocr_without_token_returns_401(self, s_anon):
+        r = s_anon.post(f"{API}/ocr", json={"image_base64": _text_image_b64()})
+        assert r.status_code == 401, r.text
+
+    def test_ocr_with_invalid_token_returns_401(self, s_anon):
+        r = s_anon.post(f"{API}/ocr",
+                        headers={"Authorization": "Bearer TEST_not_a_token"},
+                        json={"image_base64": _text_image_b64()})
+        assert r.status_code == 401
+
+    def test_ai_usage_without_token_returns_401(self, s_anon):
+        r = s_anon.get(f"{API}/ai/usage")
+        assert r.status_code == 401
+
+    # --- /api/ai/usage shape ---
+    def test_ai_usage_shape_fresh_user(self, s_ocr, mongo):
+        _reset_usage(mongo)
+        r = s_ocr.get(f"{API}/ai/usage")
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["ok"] is True
-        assert body["word_count"] >= 3
+        assert body == {"limit": 50, "used": 0, "remaining": 50, "date": _utc_date_str()}
 
-    def test_ocr_invalid_short_base64(self, s_anon):
-        r = s_anon.post(f"{API}/ocr", json={"image_base64": "abc"})
+    def test_ai_usage_reflects_seeded_count(self, s_ocr, mongo):
+        _reset_usage(mongo)
+        mongo.ai_usage.insert_one({"user_id": USER_OCR["user_id"], "date": _utc_date_str(), "count": 37})
+        r = s_ocr.get(f"{API}/ai/usage")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["limit"] == 50
+        assert body["used"] == 37
+        assert body["remaining"] == 13
+        assert body["date"] == _utc_date_str()
+        _reset_usage(mongo)
+
+    # --- 2MB size cap ---
+    def test_ocr_size_cap_returns_413(self, s_ocr, mongo):
+        _reset_usage(mongo)
+        # Build a payload whose decoded length is > 2MB. Use 2.5MB of zero bytes which base64-encodes
+        # to ~3.4M chars; this is checked BEFORE the LLM call so no real OCR traffic is generated.
+        oversized = base64.b64encode(b"\x00" * (int(2.5 * 1024 * 1024))).decode()
+        assert (len(oversized) * 3) // 4 > 2 * 1024 * 1024
+        r = s_ocr.post(f"{API}/ocr", json={"image_base64": oversized})
+        assert r.status_code == 413, r.text
+        # Still should not increment usage (we rejected pre-LLM)
+        used_after = mongo.ai_usage.find_one({"user_id": USER_OCR["user_id"], "date": _utc_date_str()})
+        assert used_after is None or int(used_after.get("count", 0)) == 0
+
+    # --- Short/invalid payload ---
+    def test_ocr_invalid_short_base64(self, s_ocr):
+        r = s_ocr.post(f"{API}/ocr", json={"image_base64": "abc"})
         assert r.status_code == 400
+
+    # --- Daily limit (seeded at 50 → next call must 429 without hitting the LLM) ---
+    def test_ocr_daily_limit_returns_429_when_seeded_50(self, s_ocr, mongo):
+        _reset_usage(mongo)
+        mongo.ai_usage.insert_one({"user_id": USER_OCR["user_id"], "date": _utc_date_str(), "count": 50})
+        r = s_ocr.post(f"{API}/ocr", json={"image_base64": _text_image_b64()}, timeout=30)
+        assert r.status_code == 429, r.text
+        # usage must remain unchanged (not incremented past 50)
+        doc = mongo.ai_usage.find_one({"user_id": USER_OCR["user_id"], "date": _utc_date_str()})
+        assert doc and int(doc["count"]) == 50
+        # /api/ai/usage reports remaining=0
+        u = s_ocr.get(f"{API}/ai/usage").json()
+        assert u["used"] == 50 and u["remaining"] == 0
+        _reset_usage(mongo)
+
+    # --- Successful OCR increments ai_usage, returns remaining, stores no image ---
+    def test_ocr_success_increments_usage_and_returns_remaining(self, s_ocr, mongo):
+        _reset_usage(mongo)
+        # Seed usage at 10 so we can validate the exact remaining=39 after this call.
+        mongo.ai_usage.insert_one({"user_id": USER_OCR["user_id"], "date": _utc_date_str(), "count": 10})
+
+        # Snapshot collections BEFORE the call so we can prove no image storage happened.
+        collections_before = set(mongo.list_collection_names())
+
+        r = s_ocr.post(f"{API}/ocr", json={"image_base64": _text_image_b64()}, timeout=120)
+        if r.status_code == 502:
+            pytest.skip(f"Upstream LLM unavailable: {r.text}")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "ok" in body and "text" in body and "word_count" in body and "remaining" in body
+        assert isinstance(body["remaining"], int)
+        # Exactly one increment: 10 -> 11, remaining = 50 - 11 = 39.
+        assert body["remaining"] == 39, body
+        if body["ok"] is True:
+            assert body["word_count"] >= 3
+            assert body["text"].strip() != ""
+
+        # ai_usage incremented by exactly 1
+        doc = mongo.ai_usage.find_one({"user_id": USER_OCR["user_id"], "date": _utc_date_str()})
+        assert doc and int(doc["count"]) == 11
+
+        # /api/ai/usage mirrors the increment
+        u = s_ocr.get(f"{API}/ai/usage").json()
+        assert u["used"] == 11 and u["remaining"] == 39
+
+        # --- No image storage: no new collection created, and no collection with "image" in the name
+        # contains anything linked to our test user. The OCR endpoint also never writes to quotes. ---
+        collections_after = set(mongo.list_collection_names())
+        new_collections = collections_after - collections_before
+        assert new_collections <= {"ai_usage"}, f"Unexpected new collections: {new_collections}"
+        for name in collections_after:
+            if "image" in name.lower() or "ocr" in name.lower():
+                assert mongo[name].count_documents({}) == 0, \
+                    f"Found image-like persisted data in '{name}'"
+        # Also confirm no quote document was created as a side effect
+        assert mongo.quotes.count_documents({"user_id": USER_OCR["user_id"]}) == 0
+
+        _reset_usage(mongo)

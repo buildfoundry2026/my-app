@@ -45,15 +45,11 @@ function AuthGate() {
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
-      <Stack.Protected guard={!user}>
-        <Stack.Screen name="login" options={{ animation: "fade" }} />
-      </Stack.Protected>
-      <Stack.Protected guard={!!user}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="crop" options={{ animation: "fade" }} />
-        <Stack.Screen name="editor" options={{ animation: "slide_from_right" }} />
-      </Stack.Protected>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="login" options={{ animation: "slide_from_bottom" }} />
+      <Stack.Screen name="crop" options={{ animation: "fade" }} />
+      <Stack.Screen name="editor" options={{ animation: "slide_from_right" }} />
     </Stack>
   );
 }
