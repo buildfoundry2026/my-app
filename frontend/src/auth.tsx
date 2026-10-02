@@ -68,7 +68,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (signingIn) return;
     setSigningIn(true);
     try {
-      const redirectTo = makeRedirectUri();
+      // Expo Go: exp://<lan-ip>:<metro-port>. Builds: frontend:// (app.json scheme).
+      // Supabase only honours redirectTo if it matches the dashboard's Redirect URLs
+      // allow list; otherwise it silently falls back to the Site URL (localhost).
+      const redirectTo = makeRedirectUri({ scheme: "frontend" });
+      if (__DEV__) console.log(`[auth] OAuth redirectTo: ${redirectTo}`);
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: { redirectTo, skipBrowserRedirect: true },
@@ -78,6 +82,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.type === "success") {
         const created = await createSessionFromUrl(res.url);
         if (!created) throw new Error("Sign-in didn't return a session.");
+      } else if (__DEV__) {
+        console.warn(
+          `[auth] Sign-in browser closed without returning to the app. If it landed on localhost, add ${redirectTo} to Supabase > Authentication > URL Configuration > Redirect URLs.`,
+        );
       }
     } catch (e: any) {
       toast(e?.message || "Google sign-in failed. Please try again.", "error");
